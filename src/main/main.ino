@@ -2,29 +2,22 @@
 const int CLK_PIN = 3;
 const int DT_PIN = 4;
 const int SW_PIN = 5;
-const int BTN1_PIN = 6;
-const int BTN2_PIN = 7;
 
 // Rotary encoder variables
 volatile int encoderPos = 0;
 volatile int lastCLK = HIGH;
-unsigned long lastEncoderMove = 0;
-const unsigned long ENCODER_SETTLE_TIME = 1000; // 1 second
-static int lastEncoderPos = 0;
 
-// Button handling
-unsigned long btn1PressStart = 0;
-unsigned long btn2PressStart = 0;
-bool btn1WasPressed = false;
-bool btn2WasPressed = false;
-const unsigned long HOLD_THRESHOLD = 1000; // 1 second for hold
+// Button debouncing
+unsigned long lastButtonPress = 0;
+const unsigned long DEBOUNCE_DELAY = 250;
 
 // State machine
 enum State {
-  LISTENING_ENCODER,
-  BUTTON_INPUT_MODE
+  DISPLAY_STATE,
+  SELECTION_STATE,
+  EDIT_STATE
 };
-State currentState = LISTENING_ENCODER;
+State currentState = DISPLAY_STATE;
 
 // Data
 const int ARRAY_SIZE = 6;
@@ -47,8 +40,6 @@ void setup() {
   pinMode(CLK_PIN, INPUT_PULLUP);
   pinMode(DT_PIN, INPUT_PULLUP);
   pinMode(SW_PIN, INPUT_PULLUP);
-  pinMode(BTN1_PIN, INPUT_PULLUP);
-  pinMode(BTN2_PIN, INPUT_PULLUP);
   
   // Attach interrupt for rotary encoder
   attachInterrupt(digitalPinToInterrupt(CLK_PIN), encoderISR, CHANGE);
@@ -61,13 +52,19 @@ void setup() {
 }
 
 void loop() {
+  bool buttonPressed = checkButtonPress();
+
   switch (currentState) {
-    case LISTENING_ENCODER:
-      handleEncoderListening();
+    case DISPLAY_STATE:
+      handleDisplayState(buttonPressed);
       break;
       
-    case BUTTON_INPUT_MODE:
-      handleButtonInput();
+    case SELECTION_STATE:
+      handleSelectionState(buttonPressed);
+      break;
+    
+    case EDIT_STATE:
+      handleEditState(buttonPressed);
       break;
   }
 }
@@ -80,17 +77,70 @@ void encoderISR() {
   if (clkState != lastCLK) {
     // Determine direction
     if (dtState != clkState) {
-      encoderPos++;
-    } else {
       encoderPos--;
+    } else {
+      encoderPos++;
     }
-    lastEncoderMove = millis();
   }
   
   lastCLK = clkState;
 }
 
-void handleEncoderListening() {
+bool checkButtonPress() {
+  bool buttonState = digitalRead(SW_PIN) == LOW;
+  
+  if (buttonState && (millis() - lastButtonPress > DEBOUNCE_DELAY)) {
+    lastButtonPress = millis();
+    return true;
+  }
+  
+  return false;
+}
+
+void handleDisplayState(bool buttonPressed) {
+  static bool displayStateInitialized = false;
+  static int lastEncoderPos = 0;
+
+  if (!displayStateInitialized) {
+    Serial.print(titles[currentIndex] + " ");
+    Serial.println(values[currentIndex]);
+    displayStateInitialized = true;
+  }
+
+  // Check if encoder has moved
+  if (encoderPos != lastEncoderPos) {
+    int delta = encoderPos - lastEncoderPos;
+    lastEncoderPos = encoderPos;
+    
+    // Update index
+    currentIndex += delta;
+    
+    // Handle wrapping
+    if (currentIndex >= ARRAY_SIZE) {
+      currentIndex = 0;
+    } else if (currentIndex < 0) {
+      currentIndex = ARRAY_SIZE - 1;
+    }
+    
+    Serial.print(titles[currentIndex] + " ");
+    Serial.println(values[currentIndex]);
+  }
+  
+
+  // In display state, just wait for button press to enter selection
+  if (buttonPressed) {
+    Serial.println("\n--- Entering SELECTION mode ---");
+    Serial.print("Current Index: ");
+    Serial.println(currentIndex);
+    Serial.println("Rotate encoder to change selection");
+    currentState = SELECTION_STATE;
+    encoderPos = 0; // Reset encoder position for relative movement
+    displayStateInitialized = false;
+  }
+}
+
+void handleSelectionState(bool buttonPressed) {
+  static int lastEncoderPos = 0;
   
   // Check if encoder has moved
   if (encoderPos != lastEncoderPos) {
@@ -107,99 +157,51 @@ void handleEncoderListening() {
       currentIndex = ARRAY_SIZE - 1;
     }
     
-    Serial.print("Index: ");
-    Serial.println(currentIndex);
+    Serial.println(titles[currentIndex]);
   }
   
-  // Check if encoder has been idle for settle time
-  if (millis() - lastEncoderMove >= ENCODER_SETTLE_TIME && lastEncoderMove > 0) {
-    if (encoderPos != 0 || lastEncoderMove > 1000) { // Make sure we've actually moved
-      Serial.println("Encoder settled. Entering button input mode...");
-      Serial.print("Selected Index: ");
-      Serial.println(currentIndex);
-      currentState = BUTTON_INPUT_MODE;
-      lastEncoderMove = 0; // Reuse for timeout tracking
-    }
+  // Button press confirms selection and enters edit mode
+  if (buttonPressed) {
+    Serial.println("\n--- Entering EDIT mode ---");
+    Serial.print("Editing: ");
+    Serial.println(titles[currentIndex]);
+    Serial.print("Current value: ");
+    Serial.println(values[currentIndex]);
+    Serial.println("Rotate encoder to adjust counter");
+    currentState = EDIT_STATE;
+    encoderPos = 0; // Reset encoder position for counter adjustment
+    lastEncoderPos = 0;
   }
 }
 
-void handleButtonInput() {
-  static unsigned long modeStartTime = 0;
-  static bool initialized = false;
-  const unsigned long TIMEOUT = 3000; // 3 seconds
+void handleEditState(bool buttonPressed) {
+  static int lastEncoderPos = 0;
   
-  // Initialize timestamp when first entering this mode
-  if (!initialized) {
-    modeStartTime = millis();
-    initialized = true;
+  // Check if encoder has moved
+  if (encoderPos != lastEncoderPos) {
+    int delta = encoderPos - lastEncoderPos;
+    lastEncoderPos = encoderPos;
+    
+    // Update counter
+    counter += delta;
+    
+    Serial.print("Counter: ");
+    Serial.println(counter);
   }
   
-  bool btn1State = digitalRead(BTN1_PIN) == LOW;
-  bool btn2State = digitalRead(BTN2_PIN) == LOW;
-  
-  // Handle Button 1 (Increment)
-  if (btn1State && !btn1WasPressed) {
-    // Button just pressed
-    btn1PressStart = millis();
-    btn1WasPressed = true;
-  } else if (btn1State && btn1WasPressed) {
-    // Button is being held
-    if (millis() - btn1PressStart >= HOLD_THRESHOLD) {
-      counter += 5;
-      Serial.print("Button 1 HOLD - Counter: ");
-      Serial.println(counter);
-      btn1PressStart = millis(); // Reset to allow continuous hold increments
-    }
-  } else if (!btn1State && btn1WasPressed) {
-    // Button released
-    if (millis() - btn1PressStart < HOLD_THRESHOLD) {
-      counter++;
-      Serial.print("Button 1 PRESS - Counter: ");
-      Serial.println(counter);
-    }
-    btn1WasPressed = false;
-    modeStartTime = millis(); // Reset timeout on activity
-  }
-  
-  // Handle Button 2 (Decrement)
-  if (btn2State && !btn2WasPressed) {
-    // Button just pressed
-    btn2PressStart = millis();
-    btn2WasPressed = true;
-  } else if (btn2State && btn2WasPressed) {
-    // Button is being held
-    if (millis() - btn2PressStart >= HOLD_THRESHOLD) {
-      counter -= 5;
-      Serial.print("Button 2 HOLD - Counter: ");
-      Serial.println(counter);
-      btn2PressStart = millis(); // Reset to allow continuous hold decrements
-    }
-  } else if (!btn2State && btn2WasPressed) {
-    // Button released
-    if (millis() - btn2PressStart < HOLD_THRESHOLD) {
-      counter--;
-      Serial.print("Button 2 PRESS - Counter: ");
-      Serial.println(counter);
-    }
-    btn2WasPressed = false;
-    modeStartTime = millis(); // Reset timeout on activity
-  }
-  
-  // Check for timeout
-  if (millis() - modeStartTime >= TIMEOUT) {
-    Serial.println("Timeout - Returning to encoder listening mode");
+  // Button press confirms edit and returns to display
+  if (buttonPressed) {
+    Serial.println("\n--- Returning to DISPLAY mode ---");
     Serial.print("Final Counter Value: ");
     Serial.println(counter);
-    currentState = LISTENING_ENCODER;
-    modeStartTime = millis();
-
-    // apply counter to current value
+    Serial.print("Selected Index: ");
+    Serial.println(currentIndex);
+    Serial.println("Press button to enter SELECTION mode");
+    currentState = DISPLAY_STATE;
+    encoderPos = 0; // Reset encoder position
+    lastEncoderPos = 0;
     values[currentIndex] = values[currentIndex] + counter;
-    
-    // Reset counter
     counter = 0;
-
-    // Reset initialized
-    initialized = false;
   }
 }
+
