@@ -10,6 +10,7 @@ volatile int encoderPos = 0;
 volatile int lastCLK = HIGH;
 unsigned long lastEncoderMove = 0;
 const unsigned long ENCODER_SETTLE_TIME = 1000; // 1 second
+static int lastEncoderPos = 0;
 
 // Button handling
 unsigned long btn1PressStart = 0;
@@ -27,7 +28,7 @@ State currentState = LISTENING_ENCODER;
 
 // Data
 const int ARRAY_SIZE = 6;
-string titles[ARRAY_SIZE] = {
+String titles[ARRAY_SIZE] = {
   "Health",
   "Tax",
   "Commander Damage 1",
@@ -90,7 +91,6 @@ void encoderISR() {
 }
 
 void handleEncoderListening() {
-  static int lastEncoderPos = 0;
   
   // Check if encoder has moved
   if (encoderPos != lastEncoderPos) {
@@ -118,14 +118,21 @@ void handleEncoderListening() {
       Serial.print("Selected Index: ");
       Serial.println(currentIndex);
       currentState = BUTTON_INPUT_MODE;
-      lastEncoderMove = millis(); // Reuse for timeout tracking
+      lastEncoderMove = 0; // Reuse for timeout tracking
     }
   }
 }
 
 void handleButtonInput() {
-  static unsigned long modeStartTime = millis();
+  static unsigned long modeStartTime = 0;
+  static bool initialized = false;
   const unsigned long TIMEOUT = 3000; // 3 seconds
+  
+  // Initialize timestamp when first entering this mode
+  if (!initialized) {
+    modeStartTime = millis();
+    initialized = true;
+  }
   
   bool btn1State = digitalRead(BTN1_PIN) == LOW;
   bool btn2State = digitalRead(BTN2_PIN) == LOW;
@@ -187,9 +194,12 @@ void handleButtonInput() {
     modeStartTime = millis();
 
     // apply counter to current value
-    value[currentIndex] = value[currentIndex] + counter;
+    values[currentIndex] = values[currentIndex] + counter;
     
     // Reset counter
     counter = 0;
+
+    // Reset initialized
+    initialized = false;
   }
 }
