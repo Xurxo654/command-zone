@@ -1,3 +1,7 @@
+#include <Adafruit_SSD1306.h>
+#include <Adafruit_GFX.h>
+#include <Wire.h>
+
 // Pin Definitions
 const int CLK_PIN = 3;
 const int DT_PIN = 4;
@@ -20,18 +24,30 @@ enum State {
 State currentState = DISPLAY_STATE;
 
 // Data
-const int ARRAY_SIZE = 6;
-String titles[ARRAY_SIZE] = {
-  "Health",
-  "Tax",
-  "Commander Damage 1",
-  "Commander Damage 2",
-  "Commander Damage 3",
-  "Poison"
+struct Stat {
+  const char* title;
+  int value;
+  int max;
+  int min;
+  bool impact;
 };
-int values[ARRAY_SIZE] = { 40, 0, 0, 0, 0, 0};
+const int ARRAY_SIZE = 7;
+Stat stats[ARRAY_SIZE] = {
+  {"Health", 40, 256, 0, false},
+  {"Tax", 0, 20, 0, false},
+  {"DMG 1", 0, 21, 0, true},
+  {"DMG 2", 0, 21, 0, true},
+  {"DMG 3", 0, 21, 0, true},
+  {"Poison", 0, 11, 0, false},
+  {"Energy", 0, 256, 0, false}
+};
+
 int currentIndex = 0;
 int counter = 0;
+
+// Display
+Adafruit_SSD1306 display(128, 32, &Wire, -1);
+
 
 void setup() {
   Serial.begin(9600);
@@ -45,10 +61,19 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(CLK_PIN), encoderISR, CHANGE);
   
   lastCLK = digitalRead(CLK_PIN);
-  
-  Serial.println("Rotary Encoder System Ready");
-  Serial.print("Current Index: ");
-  Serial.println(currentIndex);
+
+  // set up display
+  if(!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) { // Try 0x3D if this fails
+    Serial.println(F("SSD1306 allocation failed"));
+    for(;;);
+  }
+  display.clearDisplay();
+  display.display();
+  display.setTextSize(2);
+  display.setTextColor(WHITE);
+  display.setCursor(2,2);
+  display.println("Command Zone");
+  display.display();
 }
 
 void loop() {
@@ -57,10 +82,6 @@ void loop() {
   switch (currentState) {
     case DISPLAY_STATE:
       handleDisplayState(buttonPressed);
-      break;
-      
-    case SELECTION_STATE:
-      handleSelectionState(buttonPressed);
       break;
     
     case EDIT_STATE:
@@ -97,14 +118,44 @@ bool checkButtonPress() {
   return false;
 }
 
+void setDisplayDisplay() {
+  display.clearDisplay();
+  display.display();
+  display.setTextSize(2);
+  display.setTextColor(WHITE);
+  display.setCursor(2,2);
+  display.print(stats[currentIndex].title);
+  display.print(": ");
+  display.println(stats[currentIndex].value);
+  display.display();
+}
+
+void setEditDisplay(int delta) {
+  display.clearDisplay();
+  display.display();
+  display.setTextSize(1);
+  display.setTextColor(WHITE);
+  display.setCursor(2,2);
+  display.print(stats[currentIndex].title);
+  display.print(": ");
+  display.println(stats[currentIndex].value + delta);
+  display.setCursor(2, 17);
+  display.print("Delta: ");
+  display.println(delta);
+  display.display();
+}
+
 void handleDisplayState(bool buttonPressed) {
   static bool displayStateInitialized = false;
   static int lastEncoderPos = 0;
 
   if (!displayStateInitialized) {
-    Serial.print(titles[currentIndex] + " ");
-    Serial.println(values[currentIndex]);
+    Serial.println("Display State Initialized");
+    Serial.print(stats[currentIndex].title);
+    Serial.print(": ");
+    Serial.println(stats[currentIndex].value);
     displayStateInitialized = true;
+    setDisplayDisplay();
   }
 
   // Check if encoder has moved
@@ -121,61 +172,39 @@ void handleDisplayState(bool buttonPressed) {
     } else if (currentIndex < 0) {
       currentIndex = ARRAY_SIZE - 1;
     }
-    
-    Serial.print(titles[currentIndex] + " ");
-    Serial.println(values[currentIndex]);
+    // Serial
+    Serial.print(stats[currentIndex].title);
+    Serial.print(": ");
+    Serial.println(stats[currentIndex].value);
+
+    // Display
+    setDisplayDisplay();
+
   }
   
 
   // In display state, just wait for button press to enter selection
   if (buttonPressed) {
-    Serial.println("\n--- Entering SELECTION mode ---");
+    Serial.println("\n--- Entering EDIT mode ---");
     Serial.print("Current Index: ");
     Serial.println(currentIndex);
     Serial.println("Rotate encoder to change selection");
-    currentState = SELECTION_STATE;
-    encoderPos = 0; // Reset encoder position for relative movement
-    displayStateInitialized = false;
-  }
-}
-
-void handleSelectionState(bool buttonPressed) {
-  static int lastEncoderPos = 0;
-  
-  // Check if encoder has moved
-  if (encoderPos != lastEncoderPos) {
-    int delta = encoderPos - lastEncoderPos;
-    lastEncoderPos = encoderPos;
-    
-    // Update index
-    currentIndex += delta;
-    
-    // Handle wrapping
-    if (currentIndex >= ARRAY_SIZE) {
-      currentIndex = 0;
-    } else if (currentIndex < 0) {
-      currentIndex = ARRAY_SIZE - 1;
-    }
-    
-    Serial.println(titles[currentIndex]);
-  }
-  
-  // Button press confirms selection and enters edit mode
-  if (buttonPressed) {
-    Serial.println("\n--- Entering EDIT mode ---");
-    Serial.print("Editing: ");
-    Serial.println(titles[currentIndex]);
-    Serial.print("Current value: ");
-    Serial.println(values[currentIndex]);
-    Serial.println("Rotate encoder to adjust counter");
     currentState = EDIT_STATE;
-    encoderPos = 0; // Reset encoder position for counter adjustment
+    encoderPos = 0; // Reset encoder position for relative movement
     lastEncoderPos = 0;
+    displayStateInitialized = false;
   }
 }
 
 void handleEditState(bool buttonPressed) {
   static int lastEncoderPos = 0;
+  static bool editInitialized = false;
+
+  if (!editInitialized) {
+    Serial.println("Edit State Initialized.");
+    editInitialized = true;
+    setEditDisplay(counter);
+  }
   
   // Check if encoder has moved
   if (encoderPos != lastEncoderPos) {
@@ -184,10 +213,14 @@ void handleEditState(bool buttonPressed) {
     
     // Update counter
     counter += delta;
+    counter = constrain(counter, stats[currentIndex].min, stats[currentIndex].max);
     
     Serial.print("Counter: ");
     Serial.println(counter);
+    setEditDisplay(counter);
   }
+
+  
   
   // Button press confirms edit and returns to display
   if (buttonPressed) {
@@ -197,11 +230,18 @@ void handleEditState(bool buttonPressed) {
     Serial.print("Selected Index: ");
     Serial.println(currentIndex);
     Serial.println("Press button to enter SELECTION mode");
+
+    // Change value
+    stats[currentIndex].value += counter;
+    if (stats[currentIndex].impact) {
+      stats[0].value -= counter;
+    }
+
     currentState = DISPLAY_STATE;
     encoderPos = 0; // Reset encoder position
     lastEncoderPos = 0;
-    values[currentIndex] = values[currentIndex] + counter;
     counter = 0;
+    editInitialized = false;
   }
 }
 
