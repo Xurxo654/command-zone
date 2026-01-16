@@ -213,7 +213,7 @@ void handleEditState(bool buttonPressed) {
     
     // Update counter
     counter += delta;
-    counter = constrain(counter, stats[currentIndex].min, stats[currentIndex].max);
+    counter = constrain(counter, 0-stats[currentIndex].value, stats[currentIndex].max - stats[currentIndex].value);
     
     Serial.print("Counter: ");
     Serial.println(counter);
