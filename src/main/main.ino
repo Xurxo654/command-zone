@@ -3,9 +3,9 @@
 #include <Wire.h>
 
 // Pin Definitions
-const int CLK_PIN = 3;
-const int DT_PIN = 4;
-const int SW_PIN = 5;
+const int CLK_PIN = 7;
+const int DT_PIN = 8;
+const int SW_PIN = 15;
 
 // Rotary encoder variables
 volatile int encoderPos = 0;
